@@ -46,35 +46,29 @@ public class ApiFetchHelper {
     }
 
     public static String fetchApiData(final String url,
-                                      final String userId,
+                                      final String body,
                                       final int timeoutMs) throws IOException {
-
-        String apiKey = System.getenv(ENV_KEY_INTERNAL_COMMUNICATION_API_KEY);
+        final var apiKey = System.getenv(ENV_KEY_INTERNAL_COMMUNICATION_API_KEY);
         if (apiKey == null || apiKey.isEmpty()) {
             throw new IOException(String.format("Environment variable %s is not set or is empty.",
                     ENV_KEY_INTERNAL_COMMUNICATION_API_KEY));
         }
 
-        RequestConfig requestConfig = RequestConfig.custom()
+        final var requestConfig = RequestConfig.custom()
                 .setConnectTimeout(Timeout.ofMilliseconds(timeoutMs))
                 .setResponseTimeout(Timeout.ofMilliseconds(timeoutMs))
                 .build();
 
-        try (CloseableHttpClient httpClient = HttpClients.custom().setDefaultRequestConfig(requestConfig).build()) {
-
-            HttpPost request = new HttpPost(url);
+        try (final var httpClient = HttpClients.custom().setDefaultRequestConfig(requestConfig).build()) {
+            final var request = new HttpPost(url);
             request.setHeader("Content-Type", "application/json");
             request.setHeader("api-key", apiKey);
-
-            JSONObject payloadObj = new JSONObject();
-            payloadObj.put("keycloakUserId", userId);
-
-            request.setEntity(new StringEntity(payloadObj.toString()));
+            request.setEntity(new StringEntity(body));
 
             return httpClient.execute(request, response -> {
                 int statusCode = response.getCode();
                 if (statusCode >= 200 && statusCode < 300) {
-                    HttpEntity entity = response.getEntity();
+                    final var entity = response.getEntity();
 
                     if (entity == null) {
                         throw new IOException("Couldn't fetch data from server");
@@ -86,5 +80,20 @@ public class ApiFetchHelper {
                 }
             });
         }
+    }
+
+    public static String getTokenDataBody(final String keycloakUserId) {
+        JSONObject payloadObj = new JSONObject();
+        payloadObj.put("keycloakUserId", keycloakUserId);
+
+        return payloadObj.toString();
+    }
+
+    public static String getRoleDataBody(final String keycloakUserId, String clientName) {
+        JSONObject payloadObj = new JSONObject();
+        payloadObj.put("keycloakUserId", keycloakUserId);
+        payloadObj.put("clientName", clientName);
+
+        return payloadObj.toString();
     }
 }
