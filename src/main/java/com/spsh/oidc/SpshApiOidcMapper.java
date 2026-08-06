@@ -162,6 +162,7 @@ public class SpshApiOidcMapper extends AbstractOIDCProtocolMapper implements OID
 
             return Optional.ofNullable(data);
         } catch (final Exception e) {
+            LOGGER.error("Error in request, returning empty for '" + key + "'", e);
             return Optional.empty();
         }
     }
