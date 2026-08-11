@@ -45,9 +45,9 @@ public class SpshApiOidcMapper extends AbstractOIDCProtocolMapper implements OID
 
         ProviderConfigProperty fetchUrlRoleProperty = new ProviderConfigProperty();
         fetchUrlRoleProperty.setName(FETCH_URL_ROLE);
-        fetchUrlRoleProperty.setLabel("Erwin Fetch Url");
+        fetchUrlRoleProperty.setLabel("Erwin Role Fetch Url");
         fetchUrlRoleProperty.setType(ProviderConfigProperty.STRING_TYPE);
-        fetchUrlRoleProperty.setHelpText("The URL to fetch data from the SPSH Backend.");
+        fetchUrlRoleProperty.setHelpText("The URL to fetch the role data from the Erwin Backend.");
         configProperties.add(fetchUrlRoleProperty);
 
         ProviderConfigProperty timeoutMsProperty = new ProviderConfigProperty();
