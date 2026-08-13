@@ -3,7 +3,9 @@ package com.spsh.oidc;
 import java.util.*;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.jboss.logging.Logger;
 import org.keycloak.models.*;
 import org.keycloak.protocol.oidc.mappers.AbstractOIDCProtocolMapper;
@@ -16,8 +18,6 @@ import org.keycloak.representations.IDToken;
 
 import com.spsh.util.ApiFetchHelper;
 
-import static java.lang.Integer.parseInt;
-
 public class SpshApiOidcMapper extends AbstractOIDCProtocolMapper implements OIDCAccessTokenMapper, OIDCIDTokenMapper, UserInfoTokenMapper {
 
     private static final Logger LOGGER = Logger.getLogger(SpshApiOidcMapper.class);
@@ -26,7 +26,8 @@ public class SpshApiOidcMapper extends AbstractOIDCProtocolMapper implements OID
 
     private static final List<ProviderConfigProperty> configProperties = new ArrayList<>();
 
-    public static final String FETCH_URL = "fetchUrl";
+    public static final String FETCH_URL_TOKEN = "fetchUrlToken";
+    public static final String FETCH_URL_ROLE = "fetchUrlRole";
     public static final String TIMEOUT_MS = "timeoutMs";
     public static final String CACHE_TTL_SECONDS = "cacheTtlSeconds";
 
@@ -35,12 +36,19 @@ public class SpshApiOidcMapper extends AbstractOIDCProtocolMapper implements OID
         OIDCAttributeMapperHelper.addIncludeInTokensConfig(configProperties, SpshApiOidcMapper.class);
         OIDCAttributeMapperHelper.addJsonTypeConfig(configProperties);
 
-        ProviderConfigProperty fetchUrlProperty = new ProviderConfigProperty();
-        fetchUrlProperty.setName(FETCH_URL);
-        fetchUrlProperty.setLabel("Erwin Fetch Url");
-        fetchUrlProperty.setType(ProviderConfigProperty.STRING_TYPE);
-        fetchUrlProperty.setHelpText("The URL to fetch data from the SPSH Backend.");
-        configProperties.add(fetchUrlProperty);
+        ProviderConfigProperty fetchUrlTokenProperty = new ProviderConfigProperty();
+        fetchUrlTokenProperty.setName(FETCH_URL_TOKEN);
+        fetchUrlTokenProperty.setLabel("Erwin Token Fetch Url");
+        fetchUrlTokenProperty.setType(ProviderConfigProperty.STRING_TYPE);
+        fetchUrlTokenProperty.setHelpText("The URL to fetch the token data from the Erwin Backend.");
+        configProperties.add(fetchUrlTokenProperty);
+
+        ProviderConfigProperty fetchUrlRoleProperty = new ProviderConfigProperty();
+        fetchUrlRoleProperty.setName(FETCH_URL_ROLE);
+        fetchUrlRoleProperty.setLabel("Erwin Role Fetch Url");
+        fetchUrlRoleProperty.setType(ProviderConfigProperty.STRING_TYPE);
+        fetchUrlRoleProperty.setHelpText("The URL to fetch the role data from the Erwin Backend.");
+        configProperties.add(fetchUrlRoleProperty);
 
         ProviderConfigProperty timeoutMsProperty = new ProviderConfigProperty();
         timeoutMsProperty.setName(TIMEOUT_MS);
@@ -88,92 +96,99 @@ public class SpshApiOidcMapper extends AbstractOIDCProtocolMapper implements OID
     protected void setClaim(IDToken token, ProtocolMapperModel mappingModel, UserSessionModel userSession, KeycloakSession keycloakSession, ClientSessionContext clientSessionCtx) {
         final var config = mappingModel.getConfig();
 
-        final var fetchUrl = config.get(FETCH_URL);
-        if (fetchUrl == null) {
-            LOGGER.warn("SpshApiOidcMapper: fetchUrl is null. No data will be fetched, extracted and mapped.");
-            throw new IllegalArgumentException("SpshApiOidcMapper: fetchUrl is null. No data will be fetched, extracted and mapped.");
+        final var fetchUrlToken = config.get(FETCH_URL_TOKEN);
+        final var fetchUrlRole = config.get(FETCH_URL_ROLE);
+        if (fetchUrlToken == null || fetchUrlRole == null) {
+            LOGGER.warn("SpshApiOidcMapper: At least one fetchUrl is null. No data will be fetched, extracted and mapped.");
+            throw new IllegalArgumentException("SpshApiOidcMapper: At least one fetchUrl is null. No data will be fetched, extracted and mapped.");
         }
 
-        final int timeoutMs = parseInt(config.getOrDefault(TIMEOUT_MS, "1500"));
-        final int cacheTtlSec = parseInt(config.getOrDefault(CACHE_TTL_SECONDS, "60"));
+        final int timeoutMs = Integer.parseInt(config.getOrDefault(TIMEOUT_MS, "1500"));
+        final int cacheTtlSec = Integer.parseInt(config.getOrDefault(CACHE_TTL_SECONDS, "60"));
 
         final UserModel user = (userSession != null) ? userSession.getUser() : null;
         if (user == null) {
             return;
         }
 
-        final var userId = user.getId();
-        if (userId == null) {
-            LOGGER.warn("SpshApiOidcMapper: userId is null. No data will be fetched, extracted and mapped.");
-            throw new IllegalArgumentException("SpshApiOidcMapper: userId is null. No data will be fetched, extracted and mapped.");
+        final var keycloakUserId = user.getId();
+        if (keycloakUserId == null) {
+            LOGGER.warn("SpshApiOidcMapper: keycloakUserId is null. No data will be fetched, extracted and mapped.");
+            throw new IllegalArgumentException("SpshApiOidcMapper: keycloakUserId is null. No data will be fetched, extracted and mapped.");
         }
-        LOGGER.info(String.format("Setting claims via custom SpshApiOidcMapper for userSub: %s", userId));
-        LOGGER.debug(String.format("Using fetchUrl: %s", fetchUrl));
+        LOGGER.info(String.format("Setting claims via custom SpshApiOidcMapper for userSub: %s", keycloakUserId));
+        LOGGER.debug(String.format("Using fetchUrl: %s", fetchUrlToken));
 
-        final var cacheValKey = "spsh_mapper_cache_value_" + mappingModel.getId();
-        final var cacheTsKey = "spsh_mapper_cache_ts_" + mappingModel.getId();
+        final var clientName = keycloakSession.getContext().getClient().getName();
 
+        final var cacheTokenDataKey = "spsh_mapper_token_data_cache_" + mappingModel.getId();
+        final var cacheRoleDataKey = "spsh_mapper_role_data_cache_" + mappingModel.getId();
+
+        final var tokenData = getCachedOrFetch(userSession, cacheTtlSec, cacheTokenDataKey,
+                () -> ApiFetchHelper.fetchApiData(fetchUrlToken, ApiFetchHelper.getTokenDataBody(keycloakUserId), timeoutMs))
+                .orElseThrow(() -> new UnsupportedOperationException("Can't fetch token data"));
+
+        final var roleData = getCachedOrFetch(userSession, cacheTtlSec, cacheRoleDataKey,
+                () -> ApiFetchHelper.fetchApiData(fetchUrlRole, ApiFetchHelper.getRoleDataBody(keycloakUserId, clientName), timeoutMs))
+                .orElse(null);
+
+        mapClaimsToToken(token, tokenData, roleData);
+    }
+
+    private Optional<String> getCachedOrFetch(final UserSessionModel userSession, final int cacheTtlSec,
+                                              final String key, ThrowingSupplier<String> supplier) {
         try {
-            final var cached = getCachedData(userSession, cacheTtlSec, cacheValKey, cacheTsKey);
+            LOGGER.debug("retrieving info from cache if valid");
 
-            final String dataToMap;
-            if (cached == null) {
-                dataToMap = ApiFetchHelper.fetchApiData(fetchUrl, userId, timeoutMs);
-                writeCacheInUserSession(userSession, dataToMap, cacheValKey, cacheTsKey);
-            } else {
-                dataToMap = cached;
+            final var cached = userSession.getNote(key);
+            final var ts = userSession.getNote(key + "_ts");
+            final var now = System.currentTimeMillis();
+
+            if (cached != null && ts != null) {
+                LOGGER.debug("cache found, testing validity");
+
+                final var fetchedAt = Long.parseLong(ts);
+                if ((now - fetchedAt) <= cacheTtlSec * 1000L) {
+                    LOGGER.debug("cache valid, returning");
+
+                    return Optional.of(cached);
+                }
             }
 
-            mapClaimsToToken(token, dataToMap);
-        } catch (Exception e) {
-            LOGGER.error("SpshApiOidcMapper: backend fetch/mapping failed; denying token issuance.", e);
-            throw new UnsupportedOperationException("Token Claim Mapping failed", e);
+            LOGGER.debug("no cache found");
+
+            final var data = supplier.get();
+            writeCacheInUserSession(userSession, key, data);
+
+            return Optional.ofNullable(data);
+        } catch (final Exception e) {
+            LOGGER.error("Error in request, returning empty for '" + key + "'", e);
+            return Optional.empty();
         }
     }
 
-    private String getCachedData(final UserSessionModel userSession, final int cacheTtlSec, final String cacheValKey, final String cacheTsKey) {
-        LOGGER.debug("retrieving info from cache if valid");
-
-        final var cached = userSession.getNote(cacheValKey);
-        final var ts = userSession.getNote(cacheTsKey);
-        final var now = System.currentTimeMillis();
-
-        if (cached != null && ts != null) {
-            LOGGER.debug("cache found, testing validity");
-
-            final var fetchedAt = Long.parseLong(ts);
-            if ((now - fetchedAt) <= cacheTtlSec * 1000L) {
-                LOGGER.debug("cache valid, returning");
-
-                return cached;
-            }
-        }
-
-        LOGGER.debug("no cache found");
-
-        return null;
-    }
-
-    private void writeCacheInUserSession(final UserSessionModel userSession, final String json, final String cacheValKey, final String cacheTsKey) {
+    private void writeCacheInUserSession(final UserSessionModel userSession, final String key, final String val) {
         try {
-            userSession.setNote(cacheValKey, json);
-            userSession.setNote(cacheTsKey, Long.toString(System.currentTimeMillis()));
+            userSession.setNote(key, val);
+            userSession.setNote(key + "_ts", Long.toString(System.currentTimeMillis()));
         } catch (Exception e) {
-            LOGGER.debug("Failed to write session cache.", e);
+            LOGGER.debug("Failed to write session cache with key: " + key, e);
         }
     }
 
-    private static void mapClaimsToToken(final IDToken token, final String json) {
-        if (json == null) {
+    private static void mapClaimsToToken(final IDToken token, final String tokenData, final String roleData) {
+        if (tokenData == null) {
             return;
         }
 
         try {
-            final var jsonObj = new ObjectMapper().readTree(json);
+            final var tokenObj = new ObjectMapper().readTree(tokenData);
 
-            final var person = jsonObj.get("personData");
-            final var schule = jsonObj.get("schuleData");
-            final var klassen = jsonObj.get("klasseData");
+            final var person = tokenObj.get("personData");
+            mapRoleData(person, roleData);
+
+            final var schule = tokenObj.get("schuleData");
+            final var klassen = tokenObj.get("klasseData");
 
             token.setOtherClaims("person", person);
             token.setOtherClaims("schule", schule);
@@ -181,5 +196,21 @@ public class SpshApiOidcMapper extends AbstractOIDCProtocolMapper implements OID
         } catch (JsonProcessingException e) {
             throw new IllegalArgumentException("Can't parse json from token data endpoint", e);
         }
+    }
+
+    private static void mapRoleData(JsonNode person, String roleData) throws JsonProcessingException {
+        if (roleData != null) {
+            final var roleObj = new ObjectMapper().readTree(roleData);
+
+            final var role = roleObj.get("mapToLmsRolle");
+            if (role != null) {
+                ((ObjectNode) person).set("rolle", role);
+            }
+        }
+    }
+
+    private interface ThrowingSupplier<T> {
+
+        T get() throws Exception;
     }
 }
